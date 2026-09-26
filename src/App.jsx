@@ -113,7 +113,7 @@ const PokemonCard = memo(({ basic, onCardClick, favorites, toggleFavorite }) => 
       ref={ref}
       className="card"
       style={{ '--accent': accent }}
-      onClick={() => data && onCardClick(data)} 
+      onClick={() => data && onCardClick(data)}
     >
       <div className="card-top">
         <span className="card-num">#{basic.id.toString().padStart(3, '0')}</span>
@@ -272,6 +272,8 @@ function App() {
   const [filterType, setFilterType] = useState('All');
   const [sortBy, setSortBy] = useState('id');
   const [selectedPokemon, setSelectedPokemon] = useState(null);
+  const [typeMembers, setTypeMembers] = useState(null);
+  const [showDropdown, setShowDropdown] = useState(false);
   const [visibleCount, setVisibleCount] = useState(15);
   const [selectedSpecies, setSelectedSpecies] = useState(null);
   const [favorites, setFavorites] = useState(() => JSON.parse(localStorage.getItem('favorites')) || []);
@@ -297,6 +299,24 @@ function App() {
       setLoadingList(false);
     })();
   }, []);
+
+  useEffect(() => {
+    if (filterType === 'All') {
+      setTypeMembers(null);
+      return;
+    }
+    (async () => {
+      const cacheKey = `type-${filterType}`;
+      const cached = cache.get(cacheKey);
+      if (cached) { setTypeMembers(cached); return; }
+      try {
+        const res = await axios.get(`https://pokeapi.co/api/v2/type/${filterType}`);
+        const ids = res.data.pokemon.map(p => Number(p.pokemon.url.split('/').filter(Boolean).pop()));
+        cache.set(cacheKey, ids);
+        setTypeMembers(ids);
+      } catch (e) { console.error(e); }
+    })();
+  }, [filterType]);
 
   // Open modal & fetch species info
   const handleCardClick = useCallback(async (pokemon) => {
@@ -326,16 +346,41 @@ function App() {
     const term = debouncedSearch.trim().toLowerCase();
     let list = pokemonList;
     if (term) {
-      const num = term.replace(/^#?0*/, '');
-      list = list.filter(p =>
-        p.name.toLowerCase().includes(term) ||
-        p.id.toString() === num ||
-        p.id.toString().includes(num)
-      );
+      const cleanTerm = term.replace(/^#/, '');
+      list = list.filter(p => {
+        const paddedId = p.id.toString().padStart(3, '0');
+        return (
+          p.name.toLowerCase().startsWith(term) ||
+          paddedId.startsWith(cleanTerm)
+        );
+      });
+    }
+    if (typeMembers) {
+      list = list.filter(p => typeMembers.includes(p.id));
     }
     if (sortBy === 'name') list = [...list].sort((a, b) => a.name.localeCompare(b.name));
     return list;
-  }, [pokemonList, debouncedSearch, sortBy]);
+  }, [pokemonList, debouncedSearch, sortBy, typeMembers]);
+
+  const suggestionList = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    let list = [...pokemonList].sort((a, b) => a.name.localeCompare(b.name));
+
+    if (term) {
+      const cleanTerm = term.replace(/^#/, ''); // just strip a leading # if present, keep zeros
+      list = list.filter(p => {
+        const paddedId = p.id.toString().padStart(3, '0'); // e.g. 5 → "005", 56 → "056"
+        return (
+          p.name.toLowerCase().startsWith(term) ||
+          paddedId.startsWith(cleanTerm) ||           // partial match while typing, e.g. "05" matches "005" and "056"
+          p.id.toString() === cleanTerm              // exact match without leading zeros too, e.g. "5" matches id 5
+        );
+      });
+    }
+
+    return list.slice(0, 10);
+  }, [pokemonList, searchTerm]);
+
   const visibleList = filteredList.slice(0, visibleCount);
 
   const allTypes = ['All', ...Object.keys(TYPE_COLORS)];
@@ -358,7 +403,19 @@ function App() {
     <div className="app">
       {/* ── Header ──────────────────────────────────────────────────── */}
       <header className="hdr">
-        <h1 className="hdr-title">POKÉDEX</h1>
+        <h1 className="hdr-title">
+          <img
+            src="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/25.png"
+            alt="Pikachu"
+            className="hdr-mascot"
+          />
+          <span className="hdr-text">POKÉDEX</span>
+          <img
+            src="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/6.png"
+            alt="Charizard"
+            className="hdr-mascot"
+          />
+        </h1>
         <div className="hdr-controls">
           <div className="search">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -369,7 +426,30 @@ function App() {
               placeholder="Filter By Name or ID..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
+              onFocus={() => setShowDropdown(true)}
+              onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
             />
+
+            {showDropdown && (
+              <ul className="search-dropdown">
+                {suggestionList.length > 0 ? (
+                  suggestionList.map(p => (
+                    <li
+                      key={p.id}
+                      onClick={() => {
+                        setSearchTerm(p.name);
+                        setShowDropdown(false);
+                      }}
+                    >
+                      <span className="dropdown-id">{p.id.toString().padStart(3, '0')}</span>
+                      <span className="dropdown-name">{p.name}</span>
+                    </li>
+                  ))
+                ) : (
+                  <li className="dropdown-empty">No matches</li>
+                )}
+              </ul>
+            )}
           </div>
           <select value={filterType} onChange={e => setFilterType(e.target.value)} className="sel">
             {allTypes.map(t => <option key={t} value={t}>{t === 'All' ? 'All Type' : t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
